@@ -26,11 +26,11 @@ function FoodService.Init()
     end
     
     -- Create RemoteEvent for UI based consumption and Feedback
-    local consumeEvent = Instance.new("RemoteEvent")
+    local consumeEvent = eventsFolder:FindFirstChild("ConsumeFood") or Instance.new("RemoteEvent")
     consumeEvent.Name = "ConsumeFood"
     consumeEvent.Parent = eventsFolder
     
-    local consumeFeedbackEvent = Instance.new("RemoteEvent")
+    local consumeFeedbackEvent = eventsFolder:FindFirstChild("ConsumeFeedback") or Instance.new("RemoteEvent")
     consumeFeedbackEvent.Name = "ConsumeFeedback"
     consumeFeedbackEvent.Parent = eventsFolder
     

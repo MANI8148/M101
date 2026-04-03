@@ -3,16 +3,26 @@
     "tree": {
         "$className": "DataModel",
         "ReplicatedStorage": {
+            "$className": "ReplicatedStorage",
             "$path": "src/ReplicatedStorage"
         },
         "ServerScriptService": {
+            "$className": "ServerScriptService",
             "$path": "src/ServerScriptService"
         },
         "StarterPlayer": {
-            "$path": "src/StarterPlayer"
+            "$className": "StarterPlayer",
+            "StarterPlayerScripts": {
+                "$className": "StarterPlayerScripts",
+                "$path": "src/StarterPlayer/StarterPlayerScripts"
+            }
         },
         "Workspace": {
-            "$path": "src/Workspace"
+            "$className": "Workspace",
+            "$ignoreUnknownInstances": true,
+            "Map": {
+                "$path": "src/Workspace/Map"
+            }
         }
     }
 }

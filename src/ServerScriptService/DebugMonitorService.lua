@@ -9,7 +9,6 @@ DebugMonitorService.Enabled = true
 DebugMonitorService.ExecTimes = {}
 
 function DebugMonitorService.Init()
-    ServiceRegistry:Register("DebugMonitorService", DebugMonitorService)
     if not DebugMonitorService.Enabled then return end
     
     task.spawn(DebugMonitorService.MonitorTick)
@@ -30,15 +29,10 @@ function DebugMonitorService.MonitorTick()
         local ZoneService = ServiceRegistry:Get("ZoneService")
         local MutationController = ServiceRegistry:Get("MutationController")
         
-        if ZoneService and MutationController then
+        if ZoneService then
             out = out .. "--- ACTIVE ZONES ---\n"
-            for zoneName, _ in pairs(ZoneService.ZoneParts) do
-                local pCount = 0
-                if ZoneService.ZonePlayers[zoneName] then
-                    for p, _ in pairs(ZoneService.ZonePlayers[zoneName]) do pCount = pCount + 1 end
-                end
-                local state = MutationController.ZoneStates[zoneName] or "Normal"
-                out = out .. string.format("[%s]: State = %s | Players = %d\n", zoneName, state, pCount)
+            for zoneType, count in pairs(ZoneService.ActiveZones) do
+                out = out .. string.format("[%s]: Players = %d\n", zoneType, count)
             end
         end
         

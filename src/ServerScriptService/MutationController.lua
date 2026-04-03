@@ -12,8 +12,6 @@ MutationController._zoneTransitions = {}
 MutationController.States = {"Normal", "Jungle", "Lava", "Frozen", "Toxic"}
 
 function MutationController.Init()
-    ServiceRegistry:Register("MutationController", MutationController)
-
     local stateFolder = ReplicatedStorage:FindFirstChild("ZoneStates")
     if not stateFolder then
         stateFolder = Instance.new("Folder")
@@ -24,19 +22,24 @@ function MutationController.Init()
 
     local ZoneService = ServiceRegistry:Get("ZoneService")
     
-    ZoneService.PlayerEnteredZone.Event:Connect(function(player, zoneName)
-        local state = MutationController.ZoneStates[zoneName] or "Normal"
-        if state ~= "Normal" then
-            MutationController.ApplyPlayerState(player, state)
-        end
-    end)
-    
-    ZoneService.PlayerLeftZone.Event:Connect(function(player, zoneName)
-        local state = MutationController.ZoneStates[zoneName] or "Normal"
-        if state ~= "Normal" then
-            MutationController.RemovePlayerState(player, state)
-        end
-    end)
+    -- Consolidated Transition Handler (Safe & Synchronized)
+    if ZoneService and ZoneService.ZoneChanged then
+        ZoneService.ZoneChanged.Event:Connect(function(player, newZone, oldZone)
+            -- 1. Remove old effects
+            local oldState = MutationController.ZoneStates[oldZone] or "Normal"
+            if oldState ~= "Normal" then
+                MutationController.RemovePlayerState(player, oldState)
+            end
+
+            -- 2. Apply new effects
+            local newState = MutationController.ZoneStates[newZone] or "Normal"
+            if newState ~= "Normal" then
+                MutationController.ApplyPlayerState(player, newState)
+            end
+        end)
+    else
+        warn("[MutationController] FAILED to connect: ZoneService or ZoneChanged event missing.")
+    end
     
     task.spawn(MutationController.StartLoop)
     task.spawn(MutationController.StartEffectTick)
@@ -46,8 +49,9 @@ function MutationController.StartLoop()
     while true do
         task.wait(1)
         local ZoneService = ServiceRegistry:Get("ZoneService")
-        if ZoneService then
-            for zoneName, _ in pairs(ZoneService.ZoneParts) do
+        if ZoneService and ZoneService.ZoneRegistry then
+            for zoneName, data in pairs(ZoneService.ZoneRegistry) do
+                if zoneName == "Wilderness" then continue end
                 if not MutationController.ZoneStates[zoneName] then
                     MutationController.ZoneStates[zoneName] = "Normal"
                     
@@ -58,7 +62,7 @@ function MutationController.StartLoop()
                     
                     task.spawn(function()
                         while true do
-                            task.wait(math.random(30, 40))
+                            task.wait(math.random(30, 45)) -- Mutation window
                             MutationController.ChangeZoneState(zoneName)
                         end
                     end)
@@ -83,8 +87,8 @@ function MutationController.ChangeZoneState(zoneName)
     
     local ZoneService = ServiceRegistry:Get("ZoneService")
     
-    -- Optimized Array Mapping: Directly process ONLY batch players trapped specifically within the relevant Zone dictionary
-    local affectedPlayers = ZoneService.ZonePlayers[zoneName] or {}
+    -- Map-based optimization: Process ONLY players currently indexed in the specific registry
+    local affectedPlayers = (ZoneService and ZoneService.ZoneRegistry[zoneName]) and ZoneService.ZoneRegistry[zoneName].Players or {}
     
     for player, _ in pairs(affectedPlayers) do
         if currentState ~= "Normal" then
@@ -143,11 +147,12 @@ function MutationController.StartEffectTick()
         local Debug = ServiceRegistry:Get("DebugMonitorService")
         local startTick = os.clock()
         
-        if ZoneService then
-            for zoneName, state in pairs(MutationController.ZoneStates) do
+        if ZoneService and ZoneService.ZoneRegistry then
+            for zoneName, data in pairs(ZoneService.ZoneRegistry) do
+                local state = MutationController.ZoneStates[zoneName]
                 if state == "Lava" then
-                    -- Process effects asynchronously relying directly on strict grouped caching
-                    local playersHere = ZoneService.ZonePlayers[zoneName] or {}
+                    -- Process effects for specific zone population
+                    local playersHere = data.Players or {}
                     for player, _ in pairs(playersHere) do
                         if player.Character and player.Character:FindFirstChild("Humanoid") then
                             local humanoid = player.Character.Humanoid

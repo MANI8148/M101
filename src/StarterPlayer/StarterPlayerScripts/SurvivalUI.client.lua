@@ -1,7 +1,8 @@
 local Players = game:GetService("Players")
-local player = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
--- Wait for leaderstats to be created
+local player = Players.LocalPlayer
 local leaderstats = player:WaitForChild("leaderstats")
 local hungerStat = leaderstats:WaitForChild("Hunger")
 local healthStat = leaderstats:WaitForChild("Health")
@@ -13,10 +14,10 @@ screenGui.Name = "SurvivalUI"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
--- Create UI Frame
+-- Create Main UI Frame
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 200, 0, 110)
-frame.Position = UDim2.new(1, -220, 1, -130)
+frame.Size = UDim2.new(0, 250, 0, 140)
+frame.Position = UDim2.new(1, -270, 1, -160)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 frame.BackgroundTransparency = 0.5
 frame.BorderSizePixel = 0
@@ -28,8 +29,8 @@ uiCorner.Parent = frame
 
 -- Island State Label
 local islandStateLabel = Instance.new("TextLabel")
-islandStateLabel.Size = UDim2.new(1, -20, 0.33, 0)
-islandStateLabel.Position = UDim2.new(0, 10, 0, 0)
+islandStateLabel.Size = UDim2.new(1, -20, 0, 30)
+islandStateLabel.Position = UDim2.new(0, 10, 0, 10)
 islandStateLabel.BackgroundTransparency = 1
 islandStateLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
 islandStateLabel.TextScaled = true
@@ -38,99 +39,132 @@ islandStateLabel.TextXAlignment = Enum.TextXAlignment.Left
 islandStateLabel.Text = "Island: Normal"
 islandStateLabel.Parent = frame
 
--- Hunger Label
-local hungerLabel = Instance.new("TextLabel")
-hungerLabel.Size = UDim2.new(1, -20, 0.33, 0)
-hungerLabel.Position = UDim2.new(0, 10, 0.33, 0)
-hungerLabel.BackgroundTransparency = 1
-hungerLabel.TextColor3 = Color3.fromRGB(255, 150, 0)
-hungerLabel.TextScaled = true
-hungerLabel.Font = Enum.Font.GothamBold
-hungerLabel.TextXAlignment = Enum.TextXAlignment.Left
-hungerLabel.Text = "Hunger: " .. hungerStat.Value
-hungerLabel.Parent = frame
+-- Hunger Bar Background
+local hungerBg = Instance.new("Frame")
+hungerBg.Size = UDim2.new(1, -20, 0, 25)
+hungerBg.Position = UDim2.new(0, 10, 0, 50)
+hungerBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+hungerBg.Parent = frame
+local hBgCorner = Instance.new("UICorner"); hBgCorner.CornerRadius = UDim.new(0, 4); hBgCorner.Parent = hungerBg
 
--- Health Label
-local healthLabel = Instance.new("TextLabel")
-healthLabel.Size = UDim2.new(1, -20, 0.33, 0)
-healthLabel.Position = UDim2.new(0, 10, 0.66, 0)
-healthLabel.BackgroundTransparency = 1
-healthLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-healthLabel.TextScaled = true
-healthLabel.Font = Enum.Font.GothamBold
-healthLabel.TextXAlignment = Enum.TextXAlignment.Left
-healthLabel.Text = "Health: " .. healthStat.Value
-healthLabel.Parent = frame
+-- Hunger Bar Fill
+local hungerFill = Instance.new("Frame")
+hungerFill.Size = UDim2.new(hungerStat.Value / 100, 0, 1, 0)
+hungerFill.BackgroundColor3 = Color3.fromRGB(255, 150, 0)
+hungerFill.Parent = hungerBg
+local hFillCorner = Instance.new("UICorner"); hFillCorner.CornerRadius = UDim.new(0, 4); hFillCorner.Parent = hungerFill
 
--- Update UI on change (Debounced explicitly)
+-- Hunger Text
+local hungerText = Instance.new("TextLabel")
+hungerText.Size = UDim2.new(1, 0, 1, 0)
+hungerText.BackgroundTransparency = 1
+hungerText.TextColor3 = Color3.fromRGB(255, 255, 255)
+hungerText.TextScaled = true
+hungerText.Font = Enum.Font.GothamBold
+hungerText.Text = "Hunger: " .. hungerStat.Value .. "/100"
+hungerText.Parent = hungerBg
+
+-- Health Bar Background
+local healthBg = Instance.new("Frame")
+healthBg.Size = UDim2.new(1, -20, 0, 25)
+healthBg.Position = UDim2.new(0, 10, 0, 85)
+healthBg.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+healthBg.Parent = frame
+local hpBgCorner = Instance.new("UICorner"); hpBgCorner.CornerRadius = UDim.new(0, 4); hpBgCorner.Parent = healthBg
+
+-- Health Bar Fill
+local healthFill = Instance.new("Frame")
+healthFill.Size = UDim2.new(healthStat.Value / 100, 0, 1, 0)
+healthFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+healthFill.Parent = healthBg
+local hpFillCorner = Instance.new("UICorner"); hpFillCorner.CornerRadius = UDim.new(0, 4); hpFillCorner.Parent = healthFill
+
+-- Health Text
+local healthText = Instance.new("TextLabel")
+healthText.Size = UDim2.new(1, 0, 1, 0)
+healthText.BackgroundTransparency = 1
+healthText.TextColor3 = Color3.fromRGB(255, 255, 255)
+healthText.TextScaled = true
+healthText.Font = Enum.Font.GothamBold
+healthText.Text = "Health: " .. math.floor(healthStat.Value) .. "/100"
+healthText.Parent = healthBg
+
+-- Efficient Event-Driven Updates
+local function updateBar(fillFrame, textLabel, value, maxVal, prefix)
+    print("[UI DEBUG] Updating " .. prefix .. " bar to " .. value)
+    local targetSize = UDim2.new(math.clamp(value / maxVal, 0, 1), 0, 1, 0)
+    local tween = TweenService:Create(fillFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = targetSize})
+    tween:Play()
+    textLabel.Text = prefix .. ": " .. math.floor(value) .. "/" .. maxVal
+end
+
 hungerStat.Changed:Connect(function(newVal)
-    local updatedText = "Hunger: " .. tostring(newVal)
-    if hungerLabel.Text ~= updatedText then
-        hungerLabel.Text = updatedText
-    end
+    updateBar(hungerFill, hungerText, newVal, 100, "Hunger")
 end)
 
 healthStat.Changed:Connect(function(newVal)
-    local updatedText = "Health: " .. tostring(math.floor(newVal))
-    if healthLabel.Text ~= updatedText then
-        healthLabel.Text = updatedText
-    end
+    updateBar(healthFill, healthText, newVal, 100, "Health")
 end)
 
--- Feedback Effects & Network Hooks
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-
+-- Zone Updates & Events
 local eventsFolder = ReplicatedStorage:WaitForChild("Events", 10)
+local statesFolder = ReplicatedStorage:WaitForChild("ZoneStates", 10)
 
--- Kill Feed UI
-local killFeedLabel = Instance.new("TextLabel")
-killFeedLabel.Size = UDim2.new(1, 0, 0, 30)
-killFeedLabel.Position = UDim2.new(0, 0, 0, 10)
-killFeedLabel.BackgroundTransparency = 1
-killFeedLabel.TextColor3 = Color3.fromRGB(255, 255, 150)
-killFeedLabel.TextScaled = true
-killFeedLabel.Font = Enum.Font.GothamBlack
-killFeedLabel.Text = ""
-killFeedLabel.Parent = screenGui
+-- Function to handle zone visuals
+local function updateZoneVisuals(zoneName, state)
+    print("[UI DEBUG] Zone Visuals Updating: " .. zoneName .. " is now " .. state)
+    islandStateLabel.Text = zoneName .. " [" .. state .. "]"
+                        
+    if state == "Lava" then
+        islandStateLabel.TextColor3 = Color3.fromRGB(255, 75, 75)
+    elseif state == "Toxic" then
+        islandStateLabel.TextColor3 = Color3.fromRGB(180, 75, 255)
+    elseif state == "Jungle" then
+        islandStateLabel.TextColor3 = Color3.fromRGB(75, 255, 75)
+    elseif state == "Frozen" then
+        islandStateLabel.TextColor3 = Color3.fromRGB(150, 255, 255)
+    else
+        islandStateLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+    end
+end
 
 if eventsFolder then
     local zoneUpdateEvent = eventsFolder:WaitForChild("ZoneUpdate", 10)
-    if zoneUpdateEvent then
+    if zoneUpdateEvent and statesFolder then
         local currentZoneConnection = nil
         zoneUpdateEvent.OnClientEvent:Connect(function(newZone)
+            print("[UI DEBUG] Player entered new zone: " .. newZone)
             if currentZoneConnection then currentZoneConnection:Disconnect() end
             
-            local statesFolder = ReplicatedStorage:WaitForChild("ZoneStates", 10)
-            if statesFolder then
-                local stateValue = statesFolder:WaitForChild(newZone, 10)
-                if stateValue then
-                    local function updateZoneUI()
-                        local state = stateValue.Value
-                        islandStateLabel.Text = newZone .. " [" .. state .. "]"
-                        
-                        if state == "Lava" then
-                            islandStateLabel.TextColor3 = Color3.fromRGB(255, 75, 75)
-                        elseif state == "Toxic" then
-                            islandStateLabel.TextColor3 = Color3.fromRGB(180, 75, 255)
-                        elseif state == "Jungle" then
-                            islandStateLabel.TextColor3 = Color3.fromRGB(75, 255, 75)
-                        elseif state == "Frozen" then
-                            islandStateLabel.TextColor3 = Color3.fromRGB(150, 255, 255)
-                        else
-                            islandStateLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
-                        end
-                    end
-                    updateZoneUI()
-                    currentZoneConnection = stateValue.Changed:Connect(updateZoneUI)
-                end
+            local stateValue = statesFolder:FindFirstChild(newZone)
+            if not stateValue then
+                stateValue = statesFolder:WaitForChild(newZone, 10)
+            end
+            
+            if stateValue then
+                updateZoneVisuals(newZone, stateValue.Value)
+                currentZoneConnection = stateValue.Changed:Connect(function(newState)
+                    updateZoneVisuals(newZone, newState)
+                end)
             end
         end)
     end
     
+    -- Kill Feed
     local killFeedEvent = eventsFolder:WaitForChild("KillFeed", 10)
     if killFeedEvent then
+        local killFeedLabel = Instance.new("TextLabel")
+        killFeedLabel.Size = UDim2.new(1, 0, 0, 30)
+        killFeedLabel.Position = UDim2.new(0, 0, 0, 10)
+        killFeedLabel.BackgroundTransparency = 1
+        killFeedLabel.TextColor3 = Color3.fromRGB(255, 255, 150)
+        killFeedLabel.TextScaled = true
+        killFeedLabel.Font = Enum.Font.GothamBlack
+        killFeedLabel.Text = ""
+        killFeedLabel.Parent = screenGui
+
         killFeedEvent.OnClientEvent:Connect(function(killer, victim)
+            print("[UI DEBUG] KillFeed Log: " .. killer .. " killed " .. victim)
             killFeedLabel.Text = killer .. " eliminated " .. victim .. "!"
             task.delay(4, function()
                 if killFeedLabel.Text == killer .. " eliminated " .. victim .. "!" then
@@ -139,34 +173,8 @@ if eventsFolder then
             end)
         end)
     end
-end
-
--- Warning UI
-local warningLabel = Instance.new("TextLabel")
-warningLabel.Size = UDim2.new(1, 0, 0, 50)
-warningLabel.Position = UDim2.new(0, 0, 0.2, 0)
-warningLabel.BackgroundTransparency = 1
-warningLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-warningLabel.TextScaled = true
-warningLabel.Font = Enum.Font.GothamBlack
-warningLabel.Text = ""
-warningLabel.Parent = screenGui
-
-task.spawn(function()
-    local warningValue = ReplicatedStorage:WaitForChild("MutationWarning", 10)
-    if warningValue then
-        warningValue.Changed:Connect(function(newWarning)
-            warningLabel.Text = newWarning
-        end)
-    end
-end)
-
--- Feedback Effects
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
-
-local eventsFolder = ReplicatedStorage:WaitForChild("Events", 10)
-if eventsFolder then
+    
+    -- Feedback Flash
     local consumeFeedbackEvent = eventsFolder:WaitForChild("ConsumeFeedback", 10)
     if consumeFeedbackEvent then
         local flashFrame = Instance.new("Frame")
@@ -178,7 +186,7 @@ if eventsFolder then
         flashFrame.Parent = screenGui
         
         consumeFeedbackEvent.OnClientEvent:Connect(function()
-            -- Flash screen UI
+            print("[UI DEBUG] Food consumed! Flashing screen.")
             flashFrame.BackgroundTransparency = 0.5
             local info = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
             local tween = TweenService:Create(flashFrame, info, {BackgroundTransparency = 1})

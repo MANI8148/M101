@@ -1,116 +1,191 @@
 local Players = game:GetService("Players")
-local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
-
-local ServiceRegistry = require(ServerScriptService.ServiceRegistry)
+local Workspace = game:GetService("Workspace")
 
 local ZoneService = {}
-ZoneService.PlayerZones = {} -- [player] = "ZoneName"
-ZoneService.ZonePlayers = {} -- [zoneName] = { [player] = true }
-ZoneService.ZoneParts = {} -- Name -> Part
-ZoneService.LastPositions = {} -- [player] = Vector3
 
-ZoneService.PlayerEnteredZone = Instance.new("BindableEvent")
-ZoneService.PlayerLeftZone = Instance.new("BindableEvent")
+-- Configurations
+local CHECK_INTERVAL = 0.5
+local STICKY_INTERVAL = 0.5 -- Debounce
+local PRIORITY = {
+    Lava = 4,
+    Toxic = 3,
+    Frozen = 2,
+    Jungle = 1,
+    Wilderness = 0
+}
+
+ZoneService.ZoneRegistry = {} 
+ZoneService.PlayerZones = {} 
+ZoneService.ActiveZones = {} 
+ZoneService.LastZoneChangeTime = {} 
+
+ZoneService.ZoneChanged = nil 
+
+-- Helper: Find or Create Zones Folder
+local function getZonesFolder()
+    local folder = Workspace:FindFirstChild("Zones")
+    if not folder then
+        local map = Workspace:FindFirstChild("Map")
+        if map then folder = map:FindFirstChild("Zones") end
+    end
+    
+    if not folder then
+        folder = Instance.new("Folder")
+        folder.Name = "Zones"
+        folder.Parent = Workspace
+    end
+    return folder
+end
 
 function ZoneService.Init()
-    ServiceRegistry:Register("ZoneService", ZoneService)
+    print("[ZoneService] Initializing Production Architecture...")
     
-    local events = ReplicatedStorage:FindFirstChild("Events")
-    local zoneUpdateEvent = events:FindFirstChild("ZoneUpdate") or Instance.new("RemoteEvent")
-    zoneUpdateEvent.Name = "ZoneUpdate"
-    zoneUpdateEvent.Parent = events
-    ZoneService.ZoneUpdateEvent = zoneUpdateEvent
-    
-    CollectionService:GetInstanceAddedSignal("Zone"):Connect(function(part)
-        ZoneService.RegisterZone(part)
-    end)
-    for _, part in ipairs(CollectionService:GetTagged("Zone")) do
-        ZoneService.RegisterZone(part)
-    end
-    
-    -- Cleanup Data securely against leaks
-    Players.PlayerRemoving:Connect(function(player)
-        local oldZone = ZoneService.PlayerZones[player]
-        if oldZone and ZoneService.ZonePlayers[oldZone] then
-            ZoneService.ZonePlayers[oldZone][player] = nil
-        end
-        ZoneService.PlayerZones[player] = nil
-        ZoneService.LastPositions[player] = nil
-    end)
-    
-    task.spawn(ZoneService.DetectionTick)
-end
+    local events = ReplicatedStorage:FindFirstChild("Events") or Instance.new("Folder")
+    events.Name = "Events"
+    events.Parent = ReplicatedStorage
 
-function ZoneService.RegisterZone(part)
-    local name = part.Name
-    ZoneService.ZoneParts[name] = part
-    if not ZoneService.ZonePlayers[name] then
-        ZoneService.ZonePlayers[name] = {}
-    end
-end
+    ZoneService.ZoneChanged = events:FindFirstChild("ZoneChanged") or Instance.new("BindableEvent")
+    ZoneService.ZoneChanged.Name = "ZoneChanged"
+    ZoneService.ZoneChanged.Parent = events
 
-function ZoneService.DetectionTick()
-    -- Restructure to inherently drastically strip polling physics costs
-    local overlapParams = OverlapParams.new()
-    overlapParams.FilterType = Enum.RaycastFilterType.Include
-    
-    while true do
-        task.wait(0.5)
-        
-        local Debug = ServiceRegistry:Get("DebugMonitorService")
-        local startTick = os.clock()
-        
-        local zonePartList = {}
-        for _, part in pairs(ZoneService.ZoneParts) do
-            table.insert(zonePartList, part)
-        end
-        overlapParams.FilterDescendantsInstances = zonePartList
-        
-        for _, player in ipairs(Players:GetPlayers()) do
-            local character = player.Character
-            local hrp = character and character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local currentPos = hrp.Position
-                local lastPos = ZoneService.LastPositions[player]
-                
-                -- Strict threshold reduction for expensive Physics loops
-                if not lastPos or (currentPos - lastPos).Magnitude >= 5 then
-                    ZoneService.LastPositions[player] = currentPos
-                    
-                    local foundZone = "Wilderness"
-                    local parts = workspace:GetPartsInPart(hrp, overlapParams)
-                    if #parts > 0 then
-                        foundZone = parts[1].Name
-                    end
-                    
-                    local oldZone = ZoneService.PlayerZones[player]
-                    if foundZone ~= oldZone then
-                        ZoneService.PlayerZones[player] = foundZone
-                        
-                        if oldZone then
-                            local cachedGroup = ZoneService.ZonePlayers[oldZone]
-                            if cachedGroup then cachedGroup[player] = nil end
-                            ZoneService.PlayerLeftZone:Fire(player, oldZone)
-                        end
-                        
-                        if foundZone ~= "Wilderness" then
-                            if not ZoneService.ZonePlayers[foundZone] then
-                                ZoneService.ZonePlayers[foundZone] = {}
-                            end
-                            ZoneService.ZonePlayers[foundZone][player] = true
-                            ZoneService.PlayerEnteredZone:Fire(player, foundZone)
-                        end
-                        
-                        ZoneService.ZoneUpdateEvent:FireClient(player, foundZone)
-                    end
+    local zonesFolder = getZonesFolder()
+    print("[ZoneService] Using folder:", zonesFolder.Name)
+    ZoneService.BuildRegistry(zonesFolder)
+
+    -- Player Tracking
+    local function startTracking(player)
+        local function onCharacterAdded(character)
+            task.spawn(function()
+                while character.Parent do
+                    task.wait(CHECK_INTERVAL)
+                    ZoneService.CheckPlayer(player)
                 end
+                ZoneService.CleanupPlayer(player)
+            end)
+        end
+        player.CharacterAdded:Connect(onCharacterAdded)
+        if player.Character then onCharacterAdded(player.Character) end
+    end
+
+    for _, player in pairs(Players:GetPlayers()) do startTracking(player) end
+    Players.PlayerAdded:Connect(startTracking)
+    Players.PlayerRemoving:Connect(function(p) ZoneService.CleanupPlayer(p) end)
+
+    print("[ZoneService] Ready.")
+end
+
+function ZoneService.BuildRegistry(folder)
+    ZoneService.ZoneRegistry = {}
+    ZoneService.ActiveZones = { Wilderness = 0 }
+    ZoneService.ZoneRegistry["Wilderness"] = { Parts = {}, Players = {}, State = "Normal" }
+
+    local count = 0
+    for _, part in pairs(folder:GetChildren()) do
+        if part:IsA("BasePart") then
+            local zoneType = part:GetAttribute("ZoneType") or part.Name
+            
+            print("[ZoneService] Registering:", part.Name, zoneType)
+
+            if not ZoneService.ZoneRegistry[zoneType] then
+                ZoneService.ZoneRegistry[zoneType] = { Parts = {}, Players = {}, State = "Normal" }
+                ZoneService.ActiveZones[zoneType] = 0
+            end
+
+            local min = part.Position - (part.Size / 2)
+            local max = part.Position + (part.Size / 2)
+
+            table.insert(ZoneService.ZoneRegistry[zoneType].Parts, {
+                Part = part,
+                Min = min,
+                Max = max
+            })
+            count = count + 1
+        end
+    end
+    print(string.format("[ZoneService] Registered %d zone parts", count))
+end
+
+local function isInside(pos, min, max)
+    return pos.X >= min.X and pos.X <= max.X
+       and pos.Y >= min.Y and pos.Y <= max.Y
+       and pos.Z >= min.Z and pos.Z <= max.Z
+end
+
+function ZoneService.GetPlayerZone(player)
+    local char = player.Character
+    if not char then return "Wilderness" end
+
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return "Wilderness" end
+
+    local pos = root.Position
+    local matchedZones = {}
+
+    for zoneType, zoneData in pairs(ZoneService.ZoneRegistry) do
+        for _, entry in ipairs(zoneData.Parts) do
+            if isInside(pos, entry.Min, entry.Max) then
+                table.insert(matchedZones, zoneType)
+                break
             end
         end
-        
-        if Debug then Debug.LogLoop("ZoneDetectionTick", os.clock() - startTick) end
     end
+
+    -- Pick highest priority
+    local finalZone = "Wilderness"
+    local highestP = -1
+    for _, zt in ipairs(matchedZones) do
+        local p = PRIORITY[zt] or 0
+        if p > highestP then
+            highestP = p
+            finalZone = zt
+        end
+    end
+
+    return finalZone
+end
+
+function ZoneService.CheckPlayer(player)
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    -- 🛡 Stickiness/Debounce
+    local now = os.clock()
+    if now - (ZoneService.LastZoneChangeTime[player] or 0) < STICKY_INTERVAL then return end
+
+    local finalZone = ZoneService.GetPlayerZone(player)
+    local oldZone = ZoneService.PlayerZones[player] or "Wilderness"
+
+    if finalZone ~= oldZone then
+        ZoneService.TransitionPlayer(player, oldZone, finalZone)
+        ZoneService.LastZoneChangeTime[player] = now
+    end
+end
+
+function ZoneService.TransitionPlayer(player, oldZone, newZone)
+    print(string.format("[ZoneService] %s: %s -> %s", player.Name, oldZone, newZone))
+    
+    if ZoneService.ZoneRegistry[oldZone] then 
+        ZoneService.ZoneRegistry[oldZone].Players[player] = nil
+        ZoneService.ActiveZones[oldZone] = math.max(0, (ZoneService.ActiveZones[oldZone] or 0) - 1)
+    end
+
+    if ZoneService.ZoneRegistry[newZone] then 
+        ZoneService.ZoneRegistry[newZone].Players[player] = true 
+        ZoneService.ActiveZones[newZone] = (ZoneService.ActiveZones[newZone] or 0) + 1
+    end
+
+    ZoneService.PlayerZones[player] = newZone
+    if ZoneService.ZoneChanged then ZoneService.ZoneChanged:Fire(player, newZone, oldZone) end
+end
+
+function ZoneService.CleanupPlayer(player)
+    local current = ZoneService.PlayerZones[player]
+    if current then ZoneService.TransitionPlayer(player, current, "Wilderness") end
+    ZoneService.PlayerZones[player] = nil
+    ZoneService.LastZoneChangeTime[player] = nil
 end
 
 return ZoneService

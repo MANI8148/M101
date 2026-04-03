@@ -11,7 +11,6 @@ LavaZoneService.PlayersInLava = {} -- [player] = true
 LavaZoneService.Connections = {}
 
 function LavaZoneService.Init()
-    ServiceRegistry:Register("LavaZoneService", LavaZoneService)
     
     -- In case parts are added dynamically
     CollectionService:GetInstanceAddedSignal("LavaZone"):Connect(function(part)

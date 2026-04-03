@@ -3,8 +3,7 @@ ServiceRegistry._services = {}
 
 function ServiceRegistry:Register(name, service)
     if self._services[name] then
-        warn("Service " .. name .. " is already registered.")
-        return
+        return -- silently ignore duplicate
     end
     self._services[name] = service
 end

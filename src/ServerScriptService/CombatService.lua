@@ -9,14 +9,18 @@ local CombatService = {}
 CombatService.Cooldowns = {}
 
 function CombatService.Init()
-    ServiceRegistry:Register("CombatService", CombatService)
-    
     -- Cleanup Data securely against memory leaks
     Players.PlayerRemoving:Connect(function(player)
         CombatService.Cooldowns[player.UserId] = nil
     end)
     
     local events = ReplicatedStorage:FindFirstChild("Events")
+    if not events then
+        events = Instance.new("Folder")
+        events.Name = "Events"
+        events.Parent = ReplicatedStorage
+    end
+
     local attackEvent = events:FindFirstChild("MeleeAttack") or Instance.new("RemoteEvent")
     attackEvent.Name = "MeleeAttack"
     attackEvent.Parent = events
