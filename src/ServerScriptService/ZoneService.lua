@@ -1,191 +1,157 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
-local ZoneService = {}
-
--- Configurations
-local CHECK_INTERVAL = 0.5
-local STICKY_INTERVAL = 0.5 -- Debounce
-local PRIORITY = {
-    Lava = 4,
-    Toxic = 3,
-    Frozen = 2,
-    Jungle = 1,
-    Wilderness = 0
+local ZoneService = {
+    Zones = {},
+    LastSwitchTime = {},
+    LastZone = {},
+    _initialized = false
 }
 
-ZoneService.ZoneRegistry = {} 
-ZoneService.PlayerZones = {} 
-ZoneService.ActiveZones = {} 
-ZoneService.LastZoneChangeTime = {} 
+-- ⚙️ CONFIGURATION
+local TICK_RATE = 0.5  
+local SCAN_RATE = 0.2 
+local SWITCH_DELAY = 1.0 
 
-ZoneService.ZoneChanged = nil 
+local MATERIAL_EFFECT_MAP = {
+    Lava = { Poison = 1.0, Cold = 0, Regen = 0 },
+    Toxic = { Poison = 0.5, Cold = 0, Regen = 0 },
+    Frozen = { Poison = 0, Cold = 1.0, Regen = 0 },
+    Jungle = { Poison = 0, Cold = 0, Regen = 1.0 },
+    Radiation = { Poison = 1.0, Cold = 0, Regen = 0 }
+}
 
--- Helper: Find or Create Zones Folder
-local function getZonesFolder()
-    local folder = Workspace:FindFirstChild("Zones")
-    if not folder then
-        local map = Workspace:FindFirstChild("Map")
-        if map then folder = map:FindFirstChild("Zones") end
-    end
-    
-    if not folder then
-        folder = Instance.new("Folder")
-        folder.Name = "Zones"
-        folder.Parent = Workspace
-    end
-    return folder
-end
+local MATERIAL_TO_TYPE = {
+    [Enum.Material.Snow] = "Frozen",
+    [Enum.Material.Sand] = "Toxic",
+    [Enum.Material.CrackedLava] = "Lava",
+    [Enum.Material.Mud] = "Toxic",
+    [Enum.Material.Basalt] = "Lava",
+    [Enum.Material.Slate] = "Radiation",
+    [Enum.Material.Grass] = "Jungle",
+    [Enum.Material.LeafyGrass] = "Jungle"
+}
 
-function ZoneService.Init()
-    print("[ZoneService] Initializing Production Architecture...")
-    
-    local events = ReplicatedStorage:FindFirstChild("Events") or Instance.new("Folder")
-    events.Name = "Events"
-    events.Parent = ReplicatedStorage
+function ZoneService.Init(zones)
+    if ZoneService._initialized then return end
+    ZoneService._initialized = true
+    ZoneService.Zones = zones
+    print(string.format("🌊 [ZoneService] Blended Gameplay Engine Online..."))
 
-    ZoneService.ZoneChanged = events:FindFirstChild("ZoneChanged") or Instance.new("BindableEvent")
-    ZoneService.ZoneChanged.Name = "ZoneChanged"
-    ZoneService.ZoneChanged.Parent = events
-
-    local zonesFolder = getZonesFolder()
-    print("[ZoneService] Using folder:", zonesFolder.Name)
-    ZoneService.BuildRegistry(zonesFolder)
-
-    -- Player Tracking
-    local function startTracking(player)
-        local function onCharacterAdded(character)
-            task.spawn(function()
-                while character.Parent do
-                    task.wait(CHECK_INTERVAL)
-                    ZoneService.CheckPlayer(player)
-                end
-                ZoneService.CleanupPlayer(player)
-            end)
-        end
-        player.CharacterAdded:Connect(onCharacterAdded)
-        if player.Character then onCharacterAdded(player.Character) end
-    end
-
-    for _, player in pairs(Players:GetPlayers()) do startTracking(player) end
-    Players.PlayerAdded:Connect(startTracking)
-    Players.PlayerRemoving:Connect(function(p) ZoneService.CleanupPlayer(p) end)
-
-    print("[ZoneService] Ready.")
-end
-
-function ZoneService.BuildRegistry(folder)
-    ZoneService.ZoneRegistry = {}
-    ZoneService.ActiveZones = { Wilderness = 0 }
-    ZoneService.ZoneRegistry["Wilderness"] = { Parts = {}, Players = {}, State = "Normal" }
-
-    local count = 0
-    for _, part in pairs(folder:GetChildren()) do
-        if part:IsA("BasePart") then
-            local zoneType = part:GetAttribute("ZoneType") or part.Name
-            
-            print("[ZoneService] Registering:", part.Name, zoneType)
-
-            if not ZoneService.ZoneRegistry[zoneType] then
-                ZoneService.ZoneRegistry[zoneType] = { Parts = {}, Players = {}, State = "Normal" }
-                ZoneService.ActiveZones[zoneType] = 0
+    task.spawn(function()
+        while true do
+            for _, player in ipairs(Players:GetPlayers()) do
+                ZoneService.UpdateInfluences(player)
             end
-
-            local min = part.Position - (part.Size / 2)
-            local max = part.Position + (part.Size / 2)
-
-            table.insert(ZoneService.ZoneRegistry[zoneType].Parts, {
-                Part = part,
-                Min = min,
-                Max = max
-            })
-            count = count + 1
+            task.wait(SCAN_RATE)
         end
-    end
-    print(string.format("[ZoneService] Registered %d zone parts", count))
+    end)
+
+    task.spawn(function()
+        while true do
+            for _, player in ipairs(Players:GetPlayers()) do
+                ZoneService.ApplyTick(player)
+            end
+            task.wait(TICK_RATE)
+        end
+    end)
 end
 
-local function isInside(pos, min, max)
-    return pos.X >= min.X and pos.X <= max.X
-       and pos.Y >= min.Y and pos.Y <= max.Y
-       and pos.Z >= min.Z and pos.Z <= max.Z
-end
-
-function ZoneService.GetPlayerZone(player)
+-- 🌿 PERSISTENT GROUND DETECTION (Exclude Character Fix)
+local function getTerrainInfluence(player, pos)
     local char = player.Character
-    if not char then return "Wilderness" end
+    if not char then return nil end
 
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return "Wilderness" end
-
-    local pos = root.Position
-    local matchedZones = {}
-
-    for zoneType, zoneData in pairs(ZoneService.ZoneRegistry) do
-        for _, entry in ipairs(zoneData.Parts) do
-            if isInside(pos, entry.Min, entry.Max) then
-                table.insert(matchedZones, zoneType)
-                break
-            end
-        end
+    local rayDirection = Vector3.new(0, -300, 0)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {char} -- 🛡️ DO NOT HIT THE PLAYER
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude 
+    
+    local result = Workspace:Raycast(pos, rayDirection, rayParams)
+    if result and result.Instance:IsA("Terrain") then
+        return MATERIAL_TO_TYPE[result.Material]
     end
-
-    -- Pick highest priority
-    local finalZone = "Wilderness"
-    local highestP = -1
-    for _, zt in ipairs(matchedZones) do
-        local p = PRIORITY[zt] or 0
-        if p > highestP then
-            highestP = p
-            finalZone = zt
-        end
-    end
-
-    return finalZone
+    return nil
 end
 
-function ZoneService.CheckPlayer(player)
+function ZoneService.UpdateInfluences(player)
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    -- 🛡 Stickiness/Debounce
-    local now = os.clock()
-    if now - (ZoneService.LastZoneChangeTime[player] or 0) < STICKY_INTERVAL then return end
+    local id = player.UserId
+    local pos = hrp.Position
+    local influences = {}
+    local totalWeight = 0
 
-    local finalZone = ZoneService.GetPlayerZone(player)
-    local oldZone = ZoneService.PlayerZones[player] or "Wilderness"
-
-    if finalZone ~= oldZone then
-        ZoneService.TransitionPlayer(player, oldZone, finalZone)
-        ZoneService.LastZoneChangeTime[player] = now
+    for _, zone in ipairs(ZoneService.Zones) do
+        local dist = (pos - zone.position).Magnitude
+        local radius = zone.size.X / 2
+        if dist < radius then
+            local weight = 1 - (dist / radius)
+            totalWeight = totalWeight + weight
+            table.insert(influences, { type = zone.type, weight = weight })
+        end
     end
+
+    -- 🔍 2. GROUND STICKINESS (Fixed: Passing player for exclusion)
+    local terrainType = getTerrainInfluence(player, pos)
+    if terrainType then
+        totalWeight = totalWeight + 1.5 
+        table.insert(influences, { type = terrainType, weight = 1.5 })
+    end
+
+    local poison, cold, regen = 0, 0, 0
+    local dominant = "Wilderness"
+    local maxW = 0
+
+    for _, z in ipairs(influences) do
+        local normWeight = z.weight / (totalWeight > 0 and totalWeight or 1)
+        local stats = MATERIAL_EFFECT_MAP[z.type]
+        if stats then
+            poison = poison + (stats.Poison * normWeight)
+            cold = cold + (stats.Cold * normWeight)
+            regen = regen + (stats.Regen * normWeight)
+        end
+        if normWeight > maxW then
+            maxW = normWeight
+            dominant = z.type
+        end
+    end
+
+    -- 🛡️ HYSTERESIS SWITCH
+    local timeNow = os.clock()
+    if dominant ~= ZoneService.LastZone[id] then
+        if not ZoneService.LastSwitchTime[id] or (timeNow - ZoneService.LastSwitchTime[id]) > SWITCH_DELAY then
+            ZoneService.LastSwitchTime[id] = timeNow
+            ZoneService.LastZone[id] = dominant
+            player:SetAttribute("CurrentZone", dominant)
+            print(string.format("🔄 [ZoneService] Stable Switch: %s → %s", player.Name, dominant))
+        end
+    end
+
+    player:SetAttribute("PoisonLevel", poison)
+    player:SetAttribute("ColdLevel", cold)
+    player:SetAttribute("RegenLevel", regen)
 end
 
-function ZoneService.TransitionPlayer(player, oldZone, newZone)
-    print(string.format("[ZoneService] %s: %s -> %s", player.Name, oldZone, newZone))
+function ZoneService.ApplyTick(player)
+    local char = player.Character
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
     
-    if ZoneService.ZoneRegistry[oldZone] then 
-        ZoneService.ZoneRegistry[oldZone].Players[player] = nil
-        ZoneService.ActiveZones[oldZone] = math.max(0, (ZoneService.ActiveZones[oldZone] or 0) - 1)
+    local poison = player:GetAttribute("PoisonLevel") or 0
+    local cold = player:GetAttribute("ColdLevel") or 0
+    local regen = player:GetAttribute("RegenLevel") or 0
+
+    local totalDamage = (poison * 1.5) + (cold * 0.8)
+    local totalHeal = (regen * 1.5)
+
+    if totalDamage > 0 then humanoid:TakeDamage(totalDamage) end
+    if totalHeal > 0 and humanoid.Health < humanoid.MaxHealth then
+        humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + totalHeal)
     end
-
-    if ZoneService.ZoneRegistry[newZone] then 
-        ZoneService.ZoneRegistry[newZone].Players[player] = true 
-        ZoneService.ActiveZones[newZone] = (ZoneService.ActiveZones[newZone] or 0) + 1
-    end
-
-    ZoneService.PlayerZones[player] = newZone
-    if ZoneService.ZoneChanged then ZoneService.ZoneChanged:Fire(player, newZone, oldZone) end
-end
-
-function ZoneService.CleanupPlayer(player)
-    local current = ZoneService.PlayerZones[player]
-    if current then ZoneService.TransitionPlayer(player, current, "Wilderness") end
-    ZoneService.PlayerZones[player] = nil
-    ZoneService.LastZoneChangeTime[player] = nil
 end
 
 return ZoneService

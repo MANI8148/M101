@@ -1,31 +1,58 @@
-local Terrain = workspace.Terrain
-local ChunkService = require(game.ServerScriptService.ChunkService)
-local ChunkConfig = require(game.ReplicatedStorage.Shared.ChunkConfig)
+local ServerScriptService = game:GetService("ServerScriptService")
+local PlayerState = require(ServerScriptService.PlayerState)
 
 local MutationService = {}
+local exposures = {} -- [userId] = exposurePoints
 
-local CHUNK_SIZE = ChunkConfig.CHUNK_SIZE
-local CHUNK_HEIGHT = ChunkConfig.CHUNK_HEIGHT
+-- 🧬 MUTATION TIERS
+local THRESHOLDS = {
+    [10] = "Thermal Resistance",
+    [30] = "Toxic Resistance",
+    [60] = "Gamma Pulse",
+    [100] = "Apex Predator"
+}
 
 function MutationService.Init()
-    print("[MutationService] Initialized")
+    print("🧬 [MutationService] Stability monitoring active.")
 end
 
-function MutationService.MutateChunk(id, newMaterial)
-    local chunks = ChunkService.GetAllChunks()
-    local chunk = chunks[id]
-    if not chunk then return end
+function MutationService.Expose(player)
+    local id = player.UserId
+    if not exposures[id] then exposures[id] = 0 end
+    
+    -- Start Exposure Loop
+    task.spawn(function()
+        local ServiceRegistry = require(ServerScriptService.ServiceRegistry)
+        local ZoneService = ServiceRegistry:Get("ZoneService")
+        
+        while player and player.Parent and ZoneService.PlayerZones[player] == "Radiation" do
+            exposures[id] = exposures[id] + 1
+            PlayerState.Update(player, "Mutation", exposures[id])
+            
+            -- Check for Tier Upgrades
+            for threshold, name in pairs(THRESHOLDS) do
+                if exposures[id] == threshold then
+                    print(string.format("🧬 [Mutation] %s has evolved: %s unlocked!", player.Name, name))
+                    -- Random Stat Bonus
+                    local char = player.Character
+                    local hum = char and char:FindFirstChild("Humanoid")
+                    if hum then
+                        hum.MaxHealth = hum.MaxHealth + 10
+                        hum.Health = hum.MaxHealth
+                    end
+                end
+            end
+            
+            task.wait(1)
+        end
+    end)
+end
 
-    -- 🌍 Replace terrain visually
-    Terrain:FillBlock(
-        CFrame.new(chunk.Position),
-        Vector3.new(CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE),
-        newMaterial
-    )
-
-    -- 🧠 Update logic
-    chunk.Material = newMaterial.Name
-    chunk.Mutation = "Mutated"
+function MutationService.AddMutation(player, code)
+    -- Manual/External mutation addition
+    local id = player.UserId
+    exposures[id] = (exposures[id] or 0) + 10 -- Grant 10 points
+    PlayerState.Update(player, "Mutation", exposures[id])
 end
 
 return MutationService
